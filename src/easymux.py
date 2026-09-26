@@ -37,6 +37,8 @@ def parser():
     for name in ('claude', 'codex'):
         agent.add_argument('--' + name, dest='agent', action='store_const', const=name,
                            help='start ' + name + ' in every pane of a new workspace')
+    agent.add_argument('-c', '--command', metavar='COMMAND',
+                       help='run a shell command in every pane of a new workspace')
     actions = p.add_mutually_exclusive_group()
     actions.add_argument('--list', action='store_true', help='list EasyMux sessions')
     actions.add_argument('--kill', nargs='?', const='', metavar='WORKSPACE',
@@ -106,7 +108,7 @@ class Tmux:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
-    def create(self, name, count, agent):
+    def create(self, name, count, agent, custom_command=None):
         executable = shutil.which(agent) if agent else None
         if agent and not executable:
             raise EasyMuxError(f'{agent} is not on PATH. Install and sign in to {agent} first'
@@ -118,6 +120,10 @@ class Tmux:
         command = 'exec ' + shlex.quote(shell) + ' -l'
         if executable:
             command = shlex.quote(executable) + '; ' + command
+        elif custom_command is not None:
+            # A separate shell keeps exit, exec, and comments in the custom command
+            # from bypassing the login shell that follows it.
+            command = '/bin/sh -c ' + shlex.quote(custom_command) + '; ' + command
         launch = 'exec /bin/sh -c ' + shlex.quote(command)
         size = shutil.get_terminal_size((180, 54))
         cwd = os.getcwd()
@@ -131,7 +137,10 @@ class Tmux:
             self.run('set-option', '-t', name, 'mouse', 'on')
             self.run('set-option', '-t', name, 'default-shell', shell)
             self.run('set-option', '-t', name, '@easymux_panes', str(count))
-            self.run('set-option', '-t', name, '@easymux_agent', agent or 'shell')
+            self.run('set-option', '-t', name, '@easymux_agent',
+                     agent or ('custom' if custom_command is not None else 'shell'))
+            if custom_command is not None:
+                self.run('set-option', '-t', name, '@easymux_command', custom_command)
             self.run('set-option', '-t', name, 'status-left', '[#S] ')
             self.run('set-option', '-t', name, 'status-left-length', '30')
             self.run('set-option', '-t', name, 'status-right', 'Mouse: select/resize | C-b d: detach')
@@ -174,9 +183,11 @@ class Tmux:
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.command is not None and not args.command.strip():
+        p.error('-c/--command requires a non-empty command')
     management = args.list or args.kill is not None or args.killall
-    if management and (args.agent or args.panes or args.detach):
-        p.error('session management cannot be combined with layout, agent, or --detach flags')
+    if management and (args.agent or args.command is not None or args.panes or args.detach):
+        p.error('session management cannot be combined with layout, agent, command, or --detach flags')
     if (args.list or args.killall) and args.workspace:
         p.error('--list and --killall apply to every workspace; omit the workspace flag')
     if args.kill and args.workspace:
@@ -195,7 +206,8 @@ def main(argv=None):
                     print('SESSION\tWINDOWS\tCLIENTS\tLAYOUT\tCOMMAND')
                     print(tmux.run('list-sessions', '-F',
                                    '#{session_name}\t#{session_windows}\t#{session_attached}'
-                                   '\t#{@easymux_panes} panes\t#{@easymux_agent}').stdout, end='')
+                                   '\t#{@easymux_panes} panes'
+                                   '\t#{?@easymux_command,#{@easymux_command},#{@easymux_agent}}').stdout, end='')
                 return 0
             if args.killall:
                 if sessions:
@@ -216,14 +228,15 @@ def main(argv=None):
                 if os.environ.get('TMUX') and not tmux.inside():
                     raise EasyMuxError('Detach from your other tmux server first (Ctrl-b d), then run easymux.')
             if name in sessions:
-                for requested, key in [(args.panes, '@easymux_panes'), (args.agent, '@easymux_agent')]:
+                for requested, key in [(args.panes, '@easymux_panes'), (args.agent, '@easymux_agent'),
+                                       (args.command, '@easymux_command')]:
                     if requested is not None:
-                        existing = tmux.run('show-options', '-v', '-t', name, key).stdout.strip()
+                        existing = tmux.run('show-options', '-qv', '-t', name, key).stdout.removesuffix('\n')
                         if str(requested) != existing:
                             raise EasyMuxError(f'{name} already exists with different settings. '
                                                'Choose another workspace, or kill it before recreating it.')
             else:
-                tmux.create(name, args.panes or 1, args.agent)
+                tmux.create(name, args.panes or 1, args.agent, args.command)
         if args.detach:
             print(name)
         else:

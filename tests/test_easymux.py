@@ -39,6 +39,16 @@ class Arguments(unittest.TestCase):
                     easymux.main(args)
                 self.assertEqual(error.exception.code, 2)
 
+    def test_invalid_custom_command_options(self):
+        cases = [('-c',), ('-c', ''), ('-c', ' \n ')]
+        cases += [('-c', 'echo hello', flag) for flag in
+                  ('--claude', '--codex', '--list', '--kill', '--killall')]
+        for args in cases:
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    easymux.main(args)
+                self.assertEqual(error.exception.code, 2)
+
     def test_missing_tmux_is_actionable(self):
         with patch.object(shutil, 'which', return_value=None):
             with self.assertRaisesRegex(easymux.EasyMuxError, 'install-deps'):
@@ -238,6 +248,47 @@ class Workspaces(unittest.TestCase):
             self.assertEqual(len(self.panes(workspace)), count)
             dead = self.tmux('list-panes', '-t', 'easymux-' + workspace, '-F', '#{pane_dead}').stdout.splitlines()
             self.assertEqual(dead, ['0'] * count)
+
+    def test_custom_command_runs_in_every_pane_and_resumes(self):
+        command = " printf '%s\\n' \"quoted ' argument\" | cat >> 'custom log'; exit 7 # done\n"
+        self.cli('--duo', '-c', command, '--detach')
+        marker = self.directory / 'custom log'
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if marker.exists() and len(marker.read_text().splitlines()) == 2:
+                break
+            time.sleep(0.05)
+        self.assertEqual(marker.read_text().splitlines(), ["quoted ' argument"] * 2)
+        original = self.panes()
+        self.assertEqual(len(original), 2)
+        self.assertIn(command, self.cli('--list').stdout)
+        self.cli('--detach')
+        self.cli('--command', command, '--detach')
+        for flags in [('-c', 'echo different'), ('--codex',), ('--claude',)]:
+            result = self.cli(*flags, '--detach', check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('already exists', result.stderr)
+        self.assertEqual(self.panes(), original)
+        # Each pane must accept shell input after the command exits unsuccessfully.
+        for pane in original:
+            self.tmux('send-keys', '-t', pane.split()[0],
+                      "printf 'shell ready\\n' >> 'shell log'", 'Enter')
+        shell_marker = self.directory / 'shell log'
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if shell_marker.exists() and len(shell_marker.read_text().splitlines()) == 2:
+                break
+            time.sleep(0.05)
+        self.assertEqual(shell_marker.read_text().splitlines(), ['shell ready'] * 2)
+        self.assertEqual(marker.read_text().splitlines(), ["quoted ' argument"] * 2)
+
+    def test_custom_command_cannot_replace_existing_shell(self):
+        self.cli('--detach')
+        original = self.panes()
+        result = self.cli('-c', 'echo hello', '--detach', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('already exists', result.stderr)
+        self.assertEqual(self.panes(), original)
 
 
 class Installer(unittest.TestCase):
