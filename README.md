@@ -53,7 +53,7 @@ It installs the Linux command inside that distribution and a Windows launcher at
 | `easymux --codex` | Create workspace one with nine Codex sessions. |
 | `easymux --list` | List EasyMux sessions, windows, attached clients, and original layout/command. |
 | `easymux --kill two` | Terminate workspace two and its processes. Also accepts `2` or `easymux-two`. |
-| `easymux --two --kill` | Terminate workspace two. |
+| `easymux --two --kill` | Terminate workspace two or any other workspace. |
 | `easymux --kill` | Terminate the current EasyMux workspace, or workspace one when outside EasyMux. |
 | `easymux --killall` | Terminate all EasyMux workspaces and their processes. |
 | `easymux --detach` | Create/resume without attaching, useful from scripts. |
