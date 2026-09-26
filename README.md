@@ -1,6 +1,6 @@
 # EasyMux
 
-Type `easymux` to open a persistent **3×3 grid of terminals** in your current terminal window and working directory. Click a pane to select it, drag a border to resize, and use the mouse wheel to scroll. Detach and return later without restarting your processes.
+Type `easymux` to open a persistent **single-pane tmux window** in your current terminal window and working directory. Use `easymux --nona` for a **3×3 grid of terminals**. Click a pane to select it, drag a border to resize, and use the mouse wheel to scroll. Detach and return later without restarting your processes.
 
 EasyMux uses [tmux](https://github.com/tmux/tmux/wiki) on Linux and macOS, and tmux inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) on Windows. Windows panes run Linux shells and tools. Requires **tmux 3.1+ and Python 3.9+**; no Python packages are needed.
 
@@ -45,12 +45,15 @@ It installs the Linux command inside that distribution and a Windows launcher at
 
 | Command | Behavior |
 | --- | --- |
-| `easymux` | Create or resume workspace one; new workspaces default to a 3×3 grid. |
+| `easymux` | Create or resume workspace one; new workspaces default to one pane. |
 | `easymux --one` … `easymux --nine` | Create or resume one of nine independent workspaces. |
 | `easymux --duo` | Create workspace one with two terminals side by side. |
 | `easymux --trio` | Create workspace one with three terminals side by side. |
-| `easymux --claude` | Create workspace one with nine Claude sessions. |
-| `easymux --codex` | Create workspace one with nine Codex sessions. |
+| `easymux --nona` | Create workspace one with nine terminals in a 3×3 grid. |
+| `easymux --claude` | Create workspace one with one Claude session. |
+| `easymux --codex` | Create workspace one with one Codex session. |
+| `easymux --nona --claude` | Create workspace one with nine Claude sessions in a 3×3 grid. |
+| `easymux --nona --codex` | Create workspace one with nine Codex sessions in a 3×3 grid. |
 | `easymux --list` | List EasyMux sessions, windows, attached clients, and original layout/command. |
 | `easymux --kill two` | Terminate workspace two and its processes. Also accepts `2` or `easymux-two`. |
 | `easymux --two --kill` | Terminate workspace two or any other workspace. |
@@ -62,9 +65,9 @@ It installs the Linux command inside that distribution and a Windows launcher at
 Workspace, layout, and agent flags can be combined:
 
 ```sh
-easymux --two --claude       # Nine Claude sessions in workspace two
-easymux --three --codex      # Nine Codex sessions in workspace three
-easymux --four --duo        # Two shell panes in workspace four
+easymux --two --nona --claude   # Nine Claude sessions in workspace two
+easymux --three --nona --codex  # Nine Codex sessions in workspace three
+easymux --four --duo           # Two shell panes in workspace four
 easymux --five --trio --codex
 ```
 

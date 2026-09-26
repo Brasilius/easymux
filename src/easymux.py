@@ -20,7 +20,8 @@ class EasyMuxError(Exception):
 
 
 def parser():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__,
+                                epilog='New workspaces default to one pane. Use --nona for a 3x3 grid.')
     p.add_argument('--version', action='version', version='easymux ' + VERSION)
     workspace = p.add_mutually_exclusive_group()
     for word in WORDS:
@@ -30,6 +31,8 @@ def parser():
                         help='two terminals side by side')
     layout.add_argument('--trio', dest='panes', action='store_const', const=3,
                         help='three terminals side by side')
+    layout.add_argument('--nona', dest='panes', action='store_const', const=9,
+                        help='nine terminals in a 3x3 grid')
     agent = p.add_mutually_exclusive_group()
     for name in ('claude', 'codex'):
         agent.add_argument('--' + name, dest='agent', action='store_const', const=name,
@@ -141,7 +144,9 @@ class Tmux:
                                 '-t', pane, direction, '-p', str(percent), '-c', cwd,
                                 *env, 'exec sleep 86400').stdout.strip()
 
-            if count == 2:
+            if count == 1:
+                panes = [first]
+            elif count == 2:
                 panes = [first, split(first, '-h', 50)]
             else:
                 second = split(first, '-h', 66)
@@ -218,7 +223,7 @@ def main(argv=None):
                             raise EasyMuxError(f'{name} already exists with different settings. '
                                                'Choose another workspace, or kill it before recreating it.')
             else:
-                tmux.create(name, args.panes or 9, args.agent)
+                tmux.create(name, args.panes or 1, args.agent)
         if args.detach:
             print(name)
         else:

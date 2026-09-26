@@ -31,6 +31,7 @@ class Arguments(unittest.TestCase):
 
     def test_conflicting_options(self):
         for args in (['--one', '--nine'], ['--duo', '--trio'], ['--claude', '--codex'],
+                     ['--duo', '--nona'], ['--trio', '--nona'], ['--list', '--nona'],
                      ['--list', '--killall'], ['--kill', '--codex'], ['--list', '--one'],
                      ['--kill', 'two', '--one'], ['--killall', '--detach'], ['--unknown']):
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
@@ -88,7 +89,7 @@ class Workspaces(unittest.TestCase):
                          '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}').stdout.splitlines()
 
     def test_grid_mouse_directory_and_resume(self):
-        self.cli('--detach')
+        self.cli('--nona', '--detach')
         original = self.panes()
         self.assertEqual(len(original), 9)
         positions = [tuple(map(int, line.split()[1:3])) for line in original]
@@ -142,10 +143,11 @@ class Workspaces(unittest.TestCase):
     def test_incompatible_resume_preserves_processes(self):
         self.cli('--duo', '--detach')
         original = self.panes()
-        result = self.cli('--trio', '--detach', check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('already exists', result.stderr)
-        self.assertEqual(self.panes(), original)
+        for layout in ('--trio', '--nona'):
+            result = self.cli(layout, '--detach', check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('already exists', result.stderr)
+            self.assertEqual(self.panes(), original)
 
     def test_noninteractive_attach_does_not_create_workspace(self):
         result = self.cli(check=False)
@@ -162,7 +164,7 @@ class Workspaces(unittest.TestCase):
         pid, terminal = pty.fork()
         if pid == 0:
             os.chdir(self.directory)
-            os.execve(sys.executable, [sys.executable, str(CLI)], self.env)
+            os.execve(sys.executable, [sys.executable, str(CLI), '--nona'], self.env)
         try:
             fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 120, 0, 0))
 
@@ -208,32 +210,34 @@ class Workspaces(unittest.TestCase):
         for process, (stdout, stderr) in zip(processes, results):
             self.assertEqual(process.returncode, 0, stderr)
             self.assertEqual(stdout.strip(), 'easymux-one')
-        self.assertEqual(len(self.panes()), 9)
+        self.assertEqual(len(self.panes()), 1)
 
     def test_agents_run_in_every_pane_and_exit_to_shell(self):
         bin_dir = self.directory / "tools with ' spaces"
         bin_dir.mkdir()
         self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
-        for name, workspace in [('claude', 'one'), ('codex', 'two')]:
-            marker = self.directory / (name + '.log')
+        cases = [('claude', 'one', (), 1), ('codex', 'two', (), 1),
+                 ('claude', 'three', ('--nona',), 9), ('codex', 'four', ('--nona',), 9)]
+        for name, workspace, layout, count in cases:
+            marker = self.directory / (workspace + '.log')
             self.env['EASYMUX_TEST_LOG'] = str(marker)
             fake = bin_dir / name
             fake.write_text('#!/bin/sh\nprintf "started\\n" >> "$EASYMUX_TEST_LOG"\n')
             fake.chmod(0o755)
-            # tmux retains its server environment, so explicitly set the log for the second agent.
-            if workspace == 'two':
+            # tmux retains its server environment, so update the log for subsequent workspaces.
+            if workspace != 'one':
                 self.tmux('set-environment', '-g', 'EASYMUX_TEST_LOG', str(marker))
-            self.cli('--' + workspace, '--' + name, '--detach')
+            self.cli('--' + workspace, '--' + name, *layout, '--detach')
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                if marker.exists() and len(marker.read_text().splitlines()) == 9:
+                if marker.exists() and len(marker.read_text().splitlines()) == count:
                     break
                 time.sleep(0.05)
             self.assertTrue(marker.exists())
-            self.assertEqual(len(marker.read_text().splitlines()), 9)
-            self.assertEqual(len(self.panes(workspace)), 9)
+            self.assertEqual(len(marker.read_text().splitlines()), count)
+            self.assertEqual(len(self.panes(workspace)), count)
             dead = self.tmux('list-panes', '-t', 'easymux-' + workspace, '-F', '#{pane_dead}').stdout.splitlines()
-            self.assertEqual(dead, ['0'] * 9)
+            self.assertEqual(dead, ['0'] * count)
 
 
 class Installer(unittest.TestCase):
