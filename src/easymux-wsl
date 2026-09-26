@@ -1,0 +1,3 @@
+#!/bin/bash -l
+# Load the Linux login PATH before starting the CLI from Windows.
+exec "$HOME/.local/bin/easymux" "$@"
