@@ -95,6 +95,25 @@ Workspaces survive detaching and closing the terminal, but not a machine reboot,
 
 For manual inspection: `tmux -L easymux list-sessions`. `EASYMUX_SOCKET` can select another dedicated server (letters, numbers, underscores, and hyphens only). `--killall` kills the entire selected server, so reserve it for EasyMux. Creation and management are serialized using a lock under `${XDG_STATE_HOME:-~/.local/state}/easymux`.
 
+## SSH
+
+Run EasyMux on the remote host from an interactive SSH shell. For a direct command,
+use `ssh -t user@host easymux --one --duo`. Workspaces stay on that host when you
+detach or disconnect; reconnect and run the same workspace flag to resume.
+
+SSH forwards your client's terminal type (`TERM`), but the host also needs its
+terminfo description. EasyMux checks this before creating an attached workspace
+when `infocmp` is available. If `xterm-kitty` is missing and `xterm-256color` is
+installed, it warns and uses that description only for the attachment, with reduced
+terminal capabilities. It preserves installed descriptions and does not guess for
+other unknown terminals. Detached creation and management do not need this check.
+
+For full Kitty support, connect from your local Kitty terminal with
+`kitten ssh user@host`, which installs Kitty's terminfo on the remote host. See
+[Kitty's SSH documentation](https://sw.kovidgoyal.net/kitty/kittens/ssh/).
+For an older EasyMux installation, a temporary workaround on the host is
+`TERM=xterm-256color easymux --one --duo`.
+
 ## Development
 
 ```sh

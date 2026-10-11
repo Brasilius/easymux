@@ -57,8 +57,36 @@ def session_name(value):
     return 'easymux-' + value
 
 
+def attachment_environment():
+    """Check the client's terminfo without changing the caller's environment."""
+    env = os.environ.copy()
+    term = env.get('TERM', '')
+    if not term or term in ('dumb', 'unknown'):
+        raise EasyMuxError('An interactive terminal with a valid TERM is required. '
+                           'For SSH commands, request a terminal with ssh -t.')
+    infocmp = shutil.which('infocmp')
+    if not infocmp:
+        return env  # Let tmux validate when the optional inspection tool is absent.
+
+    def available(value):
+        return subprocess.run([infocmp, '-1', value], env=env,
+                              capture_output=True).returncode == 0
+
+    if available(term):
+        return env
+    if term == 'xterm-kitty' and available('xterm-256color'):
+        env['TERM'] = 'xterm-256color'
+        print('easymux: xterm-kitty terminfo is missing; using xterm-256color for this '
+              'attachment. For full Kitty support, connect using kitten ssh.', file=sys.stderr)
+        return env
+    raise EasyMuxError(f'Terminfo for {term!r} is missing on this host. '
+                       'Install your client terminal\'s terminfo on the host '
+                       '(for Kitty, connect using kitten ssh), then retry.')
+
+
 class Tmux:
     def __init__(self):
+        self.env = os.environ.copy()
         self.executable = shutil.which('tmux')
         if not self.executable:
             raise EasyMuxError('tmux is missing. Run the installer with --install-deps.')
@@ -72,7 +100,8 @@ class Tmux:
             raise EasyMuxError('EasyMux requires tmux 3.1 or later. Upgrade tmux, then retry.')
 
     def run(self, *args, check=True):
-        result = subprocess.run(self.command + list(args), text=True, capture_output=True)
+        result = subprocess.run(self.command + list(args), env=self.env,
+                                text=True, capture_output=True)
         if check and result.returncode:
             raise EasyMuxError(result.stderr.strip() or 'tmux command failed.')
         return result
@@ -173,11 +202,12 @@ class Tmux:
             self.run('kill-session', '-t', '=' + name, check=False)
             raise
 
-    def attach(self, name):
+    def attach(self, name, env=None):
         if self.inside():
             self.run('switch-client', '-t', '=' + name)
         else:
-            os.execv(self.executable, self.command + ['attach-session', '-t', '=' + name])
+            os.execve(self.executable, self.command + ['attach-session', '-t', '=' + name],
+                      env if env is not None else os.environ.copy())
 
 
 def main(argv=None):
@@ -196,6 +226,7 @@ def main(argv=None):
         if os.name == 'nt':
             raise EasyMuxError('Run install.ps1 to install the Windows launcher using WSL.')
         tmux = Tmux()
+        attach_env = None
         name = session_name(args.workspace or 'one')
         with tmux.locked():
             sessions = tmux.sessions()
@@ -227,6 +258,9 @@ def main(argv=None):
                     raise EasyMuxError('Open easymux in an interactive terminal, or use --detach.')
                 if os.environ.get('TMUX') and not tmux.inside():
                     raise EasyMuxError('Detach from your other tmux server first (Ctrl-b d), then run easymux.')
+                if not tmux.inside():
+                    attach_env = attachment_environment()
+                    tmux.env = attach_env
             if name in sessions:
                 for requested, key in [(args.panes, '@easymux_panes'), (args.agent, '@easymux_agent'),
                                        (args.command, '@easymux_command')]:
@@ -240,7 +274,7 @@ def main(argv=None):
         if args.detach:
             print(name)
         else:
-            tmux.attach(name)
+            tmux.attach(name, attach_env)
         return 0
     except (EasyMuxError, OSError) as error:
         print('easymux: ' + str(error), file=sys.stderr)
