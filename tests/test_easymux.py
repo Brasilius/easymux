@@ -31,9 +31,11 @@ class Arguments(unittest.TestCase):
 
     def test_conflicting_options(self):
         for args in (['--one', '--nine'], ['--duo', '--trio'], ['--claude', '--codex'],
+                     ['--claude', '--antigravity'], ['--codex', '--agy'],
                      ['--duo', '--nona'], ['--trio', '--nona'], ['--list', '--nona'],
-                     ['--list', '--killall'], ['--kill', '--codex'], ['--list', '--one'],
-                     ['--kill', 'two', '--one'], ['--killall', '--detach'], ['--unknown']):
+                     ['--list', '--killall'], ['--kill', '--codex'], ['--kill', '--antigravity'],
+                     ['--list', '--one'], ['--kill', 'two', '--one'], ['--killall', '--detach'],
+                     ['--unknown']):
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     easymux.main(args)
@@ -42,12 +44,21 @@ class Arguments(unittest.TestCase):
     def test_invalid_custom_command_options(self):
         cases = [('-c',), ('-c', ''), ('-c', ' \n ')]
         cases += [('-c', 'echo hello', flag) for flag in
-                  ('--claude', '--codex', '--list', '--kill', '--killall')]
+                  ('--claude', '--codex', '--antigravity', '--agy', '--list', '--kill', '--killall')]
         for args in cases:
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     easymux.main(args)
                 self.assertEqual(error.exception.code, 2)
+
+    def test_resolve_agent_prefers_agy_and_falls_back_to_antigravity(self):
+        with patch.object(shutil, 'which', side_effect=lambda name: '/usr/bin/' + name if name == 'agy' else None):
+            self.assertEqual(easymux.resolve_agent('antigravity'), '/usr/bin/agy')
+        with patch.object(shutil, 'which', side_effect=lambda name: '/usr/bin/' + name if name == 'antigravity' else None):
+            self.assertEqual(easymux.resolve_agent('antigravity'), '/usr/bin/antigravity')
+        with patch.object(shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(easymux.EasyMuxError, r'antigravity \(agy\) is not on PATH'):
+                easymux.resolve_agent('antigravity')
 
     def test_missing_tmux_is_actionable(self):
         with patch.object(shutil, 'which', return_value=None):
@@ -64,6 +75,38 @@ class Arguments(unittest.TestCase):
             with self.assertRaisesRegex(easymux.EasyMuxError, 'failure'):
                 tmux.create('easymux-one', 9, None)
             self.assertEqual(run.call_args.args, ('kill-session', '-t', '=easymux-one'))
+
+
+class TerminalEnvironment(unittest.TestCase):
+    def test_known_terminal_is_preserved(self):
+        with patch.dict(os.environ, TERM='xterm-kitty'), \
+                patch.object(shutil, 'which', return_value='/usr/bin/infocmp'), \
+                patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            self.assertEqual(easymux.attachment_environment()['TERM'], 'xterm-kitty')
+
+    def test_missing_kitty_falls_back_without_changing_environment(self):
+        with patch.dict(os.environ, TERM='xterm-kitty'), \
+                patch.object(shutil, 'which', return_value='/usr/bin/infocmp'), \
+                patch.object(subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 1),
+                                                            subprocess.CompletedProcess([], 0)]), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(easymux.attachment_environment()['TERM'], 'xterm-256color')
+            self.assertEqual(os.environ['TERM'], 'xterm-kitty')
+            self.assertIn('kitten ssh', stderr.getvalue())
+
+    def test_missing_descriptions_fail_with_guidance(self):
+        for term in ('xterm-kitty', 'unrecognized-terminal'):
+            with self.subTest(term=term), patch.dict(os.environ, TERM=term), \
+                    patch.object(shutil, 'which', return_value='/usr/bin/infocmp'), \
+                    patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)):
+                with self.assertRaisesRegex(easymux.EasyMuxError, 'Install.*terminfo'):
+                    easymux.attachment_environment()
+
+    def test_invalid_terminal_is_rejected(self):
+        for term in ('', 'dumb', 'unknown'):
+            with self.subTest(term=term), patch.dict(os.environ, TERM=term):
+                with self.assertRaisesRegex(easymux.EasyMuxError, 'ssh -t'):
+                    easymux.attachment_environment()
 
 
 @unittest.skipUnless(shutil.which('tmux'), 'tmux is required for integration tests')
@@ -166,15 +209,27 @@ class Workspaces(unittest.TestCase):
         self.assertIn('No EasyMux sessions', self.cli('--list').stdout)
 
     def test_interactive_mouse_focus_resize_and_detach(self):
+        self.interactive_mouse_focus_resize_and_detach()
+
+    def test_interactive_missing_kitty_mouse_focus_resize_and_detach(self):
+        if not shutil.which('infocmp'):
+            self.skipTest('infocmp is required to check terminal descriptions')
+        probe = subprocess.run(['infocmp', 'xterm-kitty'], env=self.env, capture_output=True)
+        if probe.returncode == 0:
+            self.skipTest('Host already has Kitty terminfo')
+        self.interactive_mouse_focus_resize_and_detach(term='xterm-kitty')
+
+    def interactive_mouse_focus_resize_and_detach(self, term=None):
         import fcntl
         import pty
         import struct
         import termios
 
+        child_env = dict(self.env, TERM=term) if term else self.env
         pid, terminal = pty.fork()
         if pid == 0:
             os.chdir(self.directory)
-            os.execve(sys.executable, [sys.executable, str(CLI), '--nona'], self.env)
+            os.execve(sys.executable, [sys.executable, str(CLI), '--nona'], child_env)
         try:
             fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 120, 0, 0))
 
@@ -226,18 +281,20 @@ class Workspaces(unittest.TestCase):
         bin_dir = self.directory / "tools with ' spaces"
         bin_dir.mkdir()
         self.env['PATH'] = str(bin_dir) + os.pathsep + self.env['PATH']
-        cases = [('claude', 'one', (), 1), ('codex', 'two', (), 1),
-                 ('claude', 'three', ('--nona',), 9), ('codex', 'four', ('--nona',), 9)]
-        for name, workspace, layout, count in cases:
+        cases = [('claude', 'claude', 'one', (), 1), ('codex', 'codex', 'two', (), 1),
+                 ('antigravity', 'agy', 'three', (), 1), ('agy', 'agy', 'four', ('--duo',), 2),
+                 ('claude', 'claude', 'five', ('--nona',), 9), ('codex', 'codex', 'six', ('--nona',), 9),
+                 ('antigravity', 'agy', 'seven', ('--nona',), 9)]
+        for flag, binary, workspace, layout, count in cases:
             marker = self.directory / (workspace + '.log')
             self.env['EASYMUX_TEST_LOG'] = str(marker)
-            fake = bin_dir / name
+            fake = bin_dir / binary
             fake.write_text('#!/bin/sh\nprintf "started\\n" >> "$EASYMUX_TEST_LOG"\n')
             fake.chmod(0o755)
             # tmux retains its server environment, so update the log for subsequent workspaces.
             if workspace != 'one':
                 self.tmux('set-environment', '-g', 'EASYMUX_TEST_LOG', str(marker))
-            self.cli('--' + workspace, '--' + name, *layout, '--detach')
+            self.cli('--' + workspace, '--' + flag, *layout, '--detach')
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 if marker.exists() and len(marker.read_text().splitlines()) == count:
@@ -248,6 +305,47 @@ class Workspaces(unittest.TestCase):
             self.assertEqual(len(self.panes(workspace)), count)
             dead = self.tmux('list-panes', '-t', 'easymux-' + workspace, '-F', '#{pane_dead}').stdout.splitlines()
             self.assertEqual(dead, ['0'] * count)
+        # --antigravity and --agy share the same canonical agent setting when resuming.
+        self.cli('--three', '--agy', '--detach')
+        self.cli('--four', '--antigravity', '--detach')
+
+    def test_session_auto_tag_in_list_and_status_bar(self):
+        alpha = self.directory / 'project-alpha'
+        beta = self.directory / 'project-beta'
+        alpha.mkdir()
+        beta.mkdir()
+        result = subprocess.run([sys.executable, str(CLI), '--one', '-c', 'sleep 30', '--detach'],
+                                env=self.env, cwd=alpha, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        deadline = time.monotonic() + 5
+        listing = ''
+        while time.monotonic() < deadline:
+            listing = self.cli('--list').stdout
+            if f'sleep @ {alpha}' in listing:
+                break
+            time.sleep(0.05)
+        self.assertIn('SESSION\tWINDOWS\tCLIENTS\tLAYOUT\tTAG\tCOMMAND', listing)
+        self.assertIn(f'sleep @ {alpha}', listing)
+
+        status_left = self.tmux('show-options', '-qv', '-t', 'easymux-one', 'status-left').stdout.rstrip('\n')
+        self.assertEqual(status_left, easymux.STATUS_LEFT)
+        rendered = self.tmux('display-message', '-p', '-t', 'easymux-one', status_left).stdout.rstrip('\n')
+        self.assertEqual(rendered, '[easymux-one | sleep @ project-alpha] ')
+
+        # Switching directory and launching a program inside a shell session updates both tags.
+        self.cli('--two', '--detach')
+        pane = self.panes('two')[0].split()[0]
+        self.tmux('send-keys', '-t', pane, f'cd {beta} && sleep 30', 'Enter')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            listing = self.cli('--list').stdout
+            rendered = self.tmux('display-message', '-p', '-t', 'easymux-two', status_left).stdout.rstrip('\n')
+            if f'sleep @ {beta}' in listing and rendered == '[easymux-two | sleep @ project-beta] ':
+                break
+            time.sleep(0.05)
+        self.assertIn(f'sleep @ {beta}', listing)
+        self.assertEqual(rendered, '[easymux-two | sleep @ project-beta] ')
 
     def test_custom_command_runs_in_every_pane_and_resumes(self):
         command = " printf '%s\\n' \"quoted ' argument\" | cat >> 'custom log'; exit 7 # done\n"
@@ -264,7 +362,7 @@ class Workspaces(unittest.TestCase):
         self.assertIn(command, self.cli('--list').stdout)
         self.cli('--detach')
         self.cli('--command', command, '--detach')
-        for flags in [('-c', 'echo different'), ('--codex',), ('--claude',)]:
+        for flags in [('-c', 'echo different'), ('--codex',), ('--claude',), ('--antigravity',)]:
             result = self.cli(*flags, '--detach', check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('already exists', result.stderr)

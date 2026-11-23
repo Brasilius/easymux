@@ -12,11 +12,34 @@ import subprocess
 import sys
 
 WORDS = ('one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine')
+AGENTS = {
+    'claude': ('claude',),
+    'codex': ('codex',),
+    'antigravity': ('agy', 'antigravity'),
+}
+STATUS_LEFT = '[#S | #{pane_current_command} @ #{b:pane_current_path}] '
+LIST_FORMAT = (
+    '#{session_name}\t#{session_windows}\t#{session_attached}'
+    '\t#{@easymux_panes} panes'
+    '\t#{pane_current_command} @ #{pane_current_path}'
+    '\t#{?@easymux_command,#{@easymux_command},#{@easymux_agent}}'
+)
 VERSION = '1.0.0'
 
 
 class EasyMuxError(Exception):
     pass
+
+
+def resolve_agent(agent):
+    candidates = AGENTS[agent]
+    for candidate in candidates:
+        executable = shutil.which(candidate)
+        if executable:
+            return executable
+    label = agent if candidates == (agent,) else f'{agent} ({candidates[0]})'
+    raise EasyMuxError(f'{label} is not on PATH. Install and sign in to {agent} first'
+                       ' (inside WSL on Windows).')
 
 
 def parser():
@@ -37,6 +60,9 @@ def parser():
     for name in ('claude', 'codex'):
         agent.add_argument('--' + name, dest='agent', action='store_const', const=name,
                            help='start ' + name + ' in every pane of a new workspace')
+    agent.add_argument('--antigravity', '--agy', dest='agent', action='store_const',
+                       const='antigravity',
+                       help='start antigravity (agy) in every pane of a new workspace')
     agent.add_argument('-c', '--command', metavar='COMMAND',
                        help='run a shell command in every pane of a new workspace')
     actions = p.add_mutually_exclusive_group()
@@ -138,22 +164,24 @@ class Tmux:
             yield
 
     def create(self, name, count, agent, custom_command=None):
-        executable = shutil.which(agent) if agent else None
-        if agent and not executable:
-            raise EasyMuxError(f'{agent} is not on PATH. Install and sign in to {agent} first'
-                               ' (inside WSL on Windows).')
+        executable = resolve_agent(agent) if agent else None
         shell = os.environ.get('SHELL', '/bin/sh')
         if not os.path.isfile(shell) or not os.access(shell, os.X_OK):
             shell = '/bin/sh'
         # Invoke via sh so startup commands also work with fish as the user's shell.
+        # Enable job control (-m) when launching a startup program so tmux's
+        # #{pane_current_command} tracks the program rather than the wrapper shell.
         command = 'exec ' + shlex.quote(shell) + ' -l'
         if executable:
             command = shlex.quote(executable) + '; ' + command
+            launch = 'exec /bin/sh -m -c ' + shlex.quote(command)
         elif custom_command is not None:
             # A separate shell keeps exit, exec, and comments in the custom command
             # from bypassing the login shell that follows it.
-            command = '/bin/sh -c ' + shlex.quote(custom_command) + '; ' + command
-        launch = 'exec /bin/sh -c ' + shlex.quote(command)
+            command = '/bin/sh -m -c ' + shlex.quote(custom_command) + '; ' + command
+            launch = 'exec /bin/sh -m -c ' + shlex.quote(command)
+        else:
+            launch = 'exec /bin/sh -c ' + shlex.quote(command)
         size = shutil.get_terminal_size((180, 54))
         cwd = os.getcwd()
         env = ['-e', 'PATH=' + os.environ.get('PATH', os.defpath), '-e', 'SHELL=' + shell]
@@ -170,8 +198,9 @@ class Tmux:
                      agent or ('custom' if custom_command is not None else 'shell'))
             if custom_command is not None:
                 self.run('set-option', '-t', name, '@easymux_command', custom_command)
-            self.run('set-option', '-t', name, 'status-left', '[#S] ')
-            self.run('set-option', '-t', name, 'status-left-length', '30')
+            self.run('set-option', '-t', name, 'status-left', STATUS_LEFT)
+            self.run('set-option', '-t', name, 'status-left-length', '60')
+            self.run('set-option', '-t', name, 'status-interval', '2')
             self.run('set-option', '-t', name, 'status-right', 'Mouse: select/resize | C-b d: detach')
             self.run('set-option', '-t', name, 'status-right-length', '50')
             self.run('set-window-option', '-t', name, 'pane-active-border-style', 'fg=cyan')
@@ -234,11 +263,8 @@ def main(argv=None):
                 if not sessions:
                     print('No EasyMux sessions.')
                 else:
-                    print('SESSION\tWINDOWS\tCLIENTS\tLAYOUT\tCOMMAND')
-                    print(tmux.run('list-sessions', '-F',
-                                   '#{session_name}\t#{session_windows}\t#{session_attached}'
-                                   '\t#{@easymux_panes} panes'
-                                   '\t#{?@easymux_command,#{@easymux_command},#{@easymux_agent}}').stdout, end='')
+                    print('SESSION\tWINDOWS\tCLIENTS\tLAYOUT\tTAG\tCOMMAND')
+                    print(tmux.run('list-sessions', '-F', LIST_FORMAT).stdout, end='')
                 return 0
             if args.killall:
                 if sessions:

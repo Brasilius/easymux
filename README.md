@@ -52,11 +52,13 @@ It installs the Linux command inside that distribution and a Windows launcher at
 | `easymux --nona` | Create workspace one with nine terminals in a 3×3 grid. |
 | `easymux --claude` | Create workspace one with one Claude session. |
 | `easymux --codex` | Create workspace one with one Codex session. |
+| `easymux --antigravity` | Create workspace one with one Antigravity (`agy`) session (alias: `--agy`). |
 | `easymux -c 'htop'` | Create workspace one running a custom command. |
 | `easymux --duo -c 'python3 -m http.server 0'` | Run the command independently in each of two panes. |
 | `easymux --nona --claude` | Create workspace one with nine Claude sessions in a 3×3 grid. |
 | `easymux --nona --codex` | Create workspace one with nine Codex sessions in a 3×3 grid. |
-| `easymux --list` | List EasyMux sessions, windows, attached clients, and original layout/command. |
+| `easymux --nona --antigravity` | Create workspace one with nine Antigravity sessions in a 3×3 grid. |
+| `easymux --list` | List EasyMux sessions, windows, attached clients, layout, live program/directory tag, and original command. |
 | `easymux --kill two` | Terminate workspace two and its processes. Also accepts `2` or `easymux-two`. |
 | `easymux --two --kill` | Terminate workspace two or any other workspace. |
 | `easymux --kill` | Terminate the current EasyMux workspace, or workspace one when outside EasyMux. |
@@ -67,16 +69,18 @@ It installs the Linux command inside that distribution and a Windows launcher at
 Workspace and layout flags can be combined with an agent flag or custom command:
 
 ```sh
-easymux --two --nona --claude   # Nine Claude sessions in workspace two
-easymux --three --nona --codex  # Nine Codex sessions in workspace three
-easymux --four --duo           # Two shell panes in workspace four
+easymux --two --nona --claude      # Nine Claude sessions in workspace two
+easymux --three --nona --codex     # Nine Codex sessions in workspace three
+easymux --four --duo --antigravity # Two Antigravity sessions in workspace four
 easymux --five --trio --codex
 easymux --six --duo -c 'npm run dev'
 ```
 
-Install the `claude` or `codex` command and complete its sign-in before launching an agent workspace. On Windows, install these **inside the selected WSL distribution**. EasyMux uses the executable on your PATH and preserves the tools' normal permission prompts. Each pane starts an independent session; when the agent exits, the pane returns to your login shell.
+Install the `claude`, `codex`, or `agy` (`antigravity`) command and complete its sign-in before launching an agent workspace. On Windows, install these **inside the selected WSL distribution**. EasyMux uses the executable on your PATH and preserves the tools' normal permission prompts. Each pane starts an independent session; when the agent exits, the pane returns to your login shell.
 
-Use `-c 'COMMAND'` (or `--command 'COMMAND'`) to launch any CLI with arguments in every new pane, from your current directory. Commands run through `/bin/sh`, so quoting, environment assignments, pipes, and redirection are supported. For example: `easymux -c 'APP_ENV=dev python3 app.py --port 8080'`. When the command exits, the pane returns to your login shell. The command must be non-empty and cannot be combined with `--claude` or `--codex`. On Windows, the command runs inside the selected WSL distribution.
+Use `-c 'COMMAND'` (or `--command 'COMMAND'`) to launch any CLI with arguments in every new pane, from your current directory. Commands run through `/bin/sh`, so quoting, environment assignments, pipes, and redirection are supported. For example: `easymux -c 'APP_ENV=dev python3 app.py --port 8080'`. When the command exits, the pane returns to your login shell. The command must be non-empty and cannot be combined with `--claude`, `--codex`, or `--antigravity`. On Windows, the command runs inside the selected WSL distribution.
+
+Each session is automatically tagged with the active pane's running program and directory in both `easymux --list` and the tmux status bar at the bottom of the screen (`[easymux-one | program @ dir]`).
 
 An existing workspace resumes with its processes and resized layout intact. Explicitly requesting a different layout, agent, or custom command for that workspace gives an error; custom commands are compared exactly as supplied. Use another workspace or terminate the old one with `--kill` before recreating it. Simply running `easymux --two` resumes workspace two regardless of its original layout or command, without launching the command again.
 
